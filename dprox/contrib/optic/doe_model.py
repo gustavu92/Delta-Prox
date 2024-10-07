@@ -3,8 +3,10 @@ from .common import *
 
 
 class HeightMap(nn.Module):
-    def __init__(self, height_map_shape, wave_lengths, refractive_idcs, xx, yy, sensor_distance):
+    def __init__(self, zernike_volume, initial_zernike_coefs, height_map_shape, wave_lengths, refractive_idcs, xx, yy, sensor_distance):
         super().__init__()
+        self.zernike_volume = zernike_volume
+        self.initial_zernike_coefs = initial_zernike_coefs
         self.wave_lengths = wave_lengths
         self.refractive_idcs = refractive_idcs
         delta_N = refractive_idcs.view([1, -1, 1, 1]) - 1.
@@ -17,9 +19,18 @@ class HeightMap(nn.Module):
         self.yy = yy
         self.sensor_distance = sensor_distance
 
-        # height_map_sqrt = torch.ones(size=height_map_shape) * 1e-4
-        height_map_sqrt = self._fresnel_phase_init(1)
-        self.height_map_sqrt = nn.Parameter(height_map_sqrt)
+        if self.zernike_volume is None:
+            height_map_sqrt = self._fresnel_phase_init(1)
+            self.height_map_sqrt = nn.Parameter(height_map_sqrt)
+        else:
+            num_zernike_coeffs = zernike_volume.shape[0]
+            self.zernike_coeffs = torch.zeros((num_zernike_coeffs, 1, 1))
+
+            if self.initial_zernike_coefs is not None:
+                for k, v in initial_zernike_coefs.items():
+                    self.zernike_coeffs[k] = v
+
+            self.zernike_coeffs = nn.Parameter(self.zernike_coeffs)
 
     def _fresnel_phase_init(self, idx=1):
         """
@@ -30,10 +41,16 @@ class HeightMap(nn.Module):
         :return: the square root of the height map calculated from the Fresnel phase.
         """
         k = 2 * torch.pi / self.wave_lengths[idx]
-        fresnel_phase = - k * ((self.xx**2 + self.yy**2)[None][None] / (2 * self.sensor_distance))
+        fresnel_phase = - k * ((self.xx**2 + self.yy**2)
+                               [None][None] / (2 * self.sensor_distance))
         fresnel_phase = fresnel_phase % (torch.pi * 2)
         height_map = self.phase_to_height_map(fresnel_phase, idx)
         return height_map ** 0.5
+
+    def height_from_zernike(self,):
+        height_map = torch.sum(self.zernike_coeffs *
+                               self.zernike_volume, dim=0, keepdim=True).unsqueeze(0)
+        return height_map
 
     def get_phase_profile(self, height_map=None):
         """
@@ -44,8 +61,10 @@ class HeightMap(nn.Module):
         :return: a complex exponential phase profile calculated from the input height map.
         """
         if height_map is None:
-            # height_map = torch.square(self.height_map_sqrt + 1e-7)
-            height_map = torch.square(self.height_map_sqrt)
+            if self.zernike_volume is None:
+                height_map = torch.square(self.height_map_sqrt)
+            else:
+                height_map = self.height_from_zernike()
         # phase delay indiced by height field
         phi = self.wave_nos * self.delta_N * height_map
         return torch.exp(1j * phi)
@@ -72,6 +91,8 @@ class HeightMap(nn.Module):
 
 class RGBCollimator(nn.Module):
     def __init__(self,
+                 zernike_volume,
+                 initial_zernike_coefs,
                  sensor_distance,
                  refractive_idcs,
                  wave_lengths,
@@ -80,6 +101,8 @@ class RGBCollimator(nn.Module):
                  wave_resolution,
                  ):
         super().__init__()
+        self.zernike_volume = zernike_volume
+        self.initial_zernike_coefs = initial_zernike_coefs
         self.wave_res = wave_resolution
         self.wave_lengths = wave_lengths
         self.sensor_distance = sensor_distance
@@ -115,7 +138,8 @@ class RGBCollimator(nn.Module):
         return output_image, psfs
 
     def _init_setup(self):
-        input_field = torch.ones((1, len(self.wave_lengths), self.wave_res[0], self.wave_res[1]))
+        input_field = torch.ones(
+            (1, len(self.wave_lengths), self.wave_res[0], self.wave_res[1]))
         self.register_buffer("input_field", input_field, persistent=False)
 
         xx, yy = get_coordinate(self.wave_res[0], self.wave_res[1],
@@ -131,7 +155,9 @@ class RGBCollimator(nn.Module):
 
     def _get_height_map(self):
         height_map_shape = (1, 3, self.wave_res[0], self.wave_res[1])
-        height_map = HeightMap(height_map_shape,
+        height_map = HeightMap(self.zernike_volume,
+                               self.initial_zernike_coefs,
+                               height_map_shape,
                                self.wave_lengths,
                                self.refractive_idcs,
                                self.xx, self.yy,
@@ -155,16 +181,23 @@ class RGBCollimator(nn.Module):
 
 @dataclass
 class DOEModelConfig:
+    zernike_volume: torch.Tensor = None
+    initial_zernike_coefs: dict = None
     circular: bool = True  # circular convolution
     aperture_diameter: float = 3e-3  # aperture diameter
     sensor_distance: float = 15e-3  # Distance of sensor to aperture
-    refractive_idcs = torch.tensor([1.4648, 1.4599, 1.4568])  # Refractive idcs of the phaseplate
-    wave_lengths = torch.tensor([460, 550, 640]) * 1e-9  # Wave lengths to be modeled and optimized for
+    refractive_idcs: torch.Tensor = field(default_factory=lambda: torch.tensor(
+        [1.4648, 1.4599, 1.4568]))  # Refractive indices of the phase plate
+    wave_lengths: torch.Tensor = field(default_factory=lambda: torch.tensor(
+        [460, 550, 640]) * 1e-9)  # Wavelengths to be modeled and optimized for
     num_steps: int = 10001  # Number of SGD steps
-    # patch_size = 1248  # Size of patches to be extracted from images, and resolution of simulated sensor
-    patch_size: int = 748  # Size of patches to be extracted from images, and resolution of simulated sensor
-    sample_interval: float = 2e-6  # Sampling interval (size of one "pixel" in the simulated wavefront)
-    wave_resolution = 1496, 1496  # Resolution of the simulated wavefront
+    # Size of patches to be extracted from images, and resolution of simulated sensor
+    patch_size: int = 748
+    # Sampling interval (size of one "pixel" in the simulated wavefront)
+    sample_interval: float = 2e-6
+    # Resolution of the simulated wavefront
+    wave_resolution: tuple = (1496, 1496)
+    # Additional model parameters
     model_kwargs: dict = field(default_factory=dict)
 
 
@@ -177,7 +210,9 @@ def build_doe_model(config: DOEModelConfig = DOEModelConfig()):
     :return: The function `build_doe_model` is returning an instance of the `RGBCollimator` class, which
     is initialized with the parameters passed in the `DOEModelConfig` object `config`.
     """
-    rgb_collim_model = RGBCollimator(config.sensor_distance,
+    rgb_collim_model = RGBCollimator(config.zernike_volume,
+                                     config.initial_zernike_coefs,
+                                     config.sensor_distance,
                                      refractive_idcs=config.refractive_idcs,
                                      wave_lengths=config.wave_lengths,
                                      patch_size=config.patch_size,
@@ -199,9 +234,24 @@ def build_baseline_profile(rgb_collim_model: RGBCollimator):
     due to propagation to a sensor distance. The fresnel phase profile is calculated using the height
     map obtained from the phase-to-height map conversion function.
     """
-    k = 2 * torch.pi / rgb_collim_model.wave_lengths[1]
-    fresnel_phase = - k * ((rgb_collim_model.xx**2 + rgb_collim_model.yy**2)[None][None] / (2 * rgb_collim_model.sensor_distance))
-    fresnel_phase = fresnel_phase % (torch.pi * 2)
-    height_map = rgb_collim_model.height_map.phase_to_height_map(fresnel_phase, 1)
+    if rgb_collim_model.zernike_volume is None:
+        k = 2 * torch.pi / rgb_collim_model.wave_lengths[1]
+        fresnel_phase = - k * ((rgb_collim_model.xx**2 + rgb_collim_model.yy**2)
+                               [None][None] / (2 * rgb_collim_model.sensor_distance))
+        fresnel_phase = fresnel_phase % (torch.pi * 2)
+        height_map = rgb_collim_model.height_map.phase_to_height_map(
+            fresnel_phase, 1)
+    else:
+        num_zernike_coeffs = rgb_collim_model.zernike_volume.shape[0]
+        zernike_coeffs = torch.zeros((num_zernike_coeffs, 1, 1))
+
+        if rgb_collim_model.initial_zernike_coefs is not None:
+            for k, v in rgb_collim_model.initial_zernike_coefs.items():
+                zernike_coeffs[k] = v
+
+        height_map = torch.sum(
+            zernike_coeffs * rgb_collim_model.zernike_volume, dim=0, keepdim=True)
+        height_map = height_map.unsqueeze(0)
+
     fresnel_phase_c = rgb_collim_model.height_map.get_phase_profile(height_map)
     return fresnel_phase_c
