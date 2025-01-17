@@ -38,9 +38,11 @@ def area_downsampling(input, target_side_length):
     """
     if not input.shape[2] % target_side_length:
         factor = int(input.shape[2] / target_side_length)
-        output = F.avg_pool2d(input=input, kernel_size=[factor, factor], stride=[factor, factor])
+        output = F.avg_pool2d(input=input, kernel_size=[
+                              factor, factor], stride=[factor, factor])
     else:
-        raise NotImplementedError
+        output = torch.nn.functional.interpolate(
+            input, size=target_side_length)
     return output
 
 
@@ -72,7 +74,8 @@ def psf2otf(psf, output_size):
             pad_top = pad_left = int(pad) + 1
             pad_bottom = pad_right = int(pad) - 1
 
-        padded = F.pad(input=psf, pad=[pad_left, pad_right, pad_top, pad_bottom], mode="constant")
+        padded = F.pad(input=psf, pad=[
+                       pad_left, pad_right, pad_top, pad_bottom], mode="constant")
     else:
         padded = psf
 
@@ -103,9 +106,11 @@ def img_psf_conv(img, psf, circular=True):
         target_side_length = 2 * img.shape[2]
         height_pad = (target_side_length - img.shape[2]) / 2
         width_pad = (target_side_length - img.shape[3]) / 2
-        pad_top, pad_bottom = int(np.ceil(height_pad)), int(np.floor(height_pad))
+        pad_top, pad_bottom = int(
+            np.ceil(height_pad)), int(np.floor(height_pad))
         pad_left, pad_right = int(np.ceil(width_pad)), int(np.floor(width_pad))
-        img = F.pad(input=img, pad=[pad_left, pad_right, pad_top, pad_bottom], mode="constant")
+        img = F.pad(input=img, pad=[pad_left, pad_right,
+                    pad_top, pad_bottom], mode="constant")
 
     img_fft = torch.fft.fft2(img)
     otf = psf2otf(psf, output_size=img.shape)
@@ -116,6 +121,30 @@ def img_psf_conv(img, psf, circular=True):
         result = result[:, :, pad_top:-pad_bottom, pad_left:-pad_right]
 
     return result
+
+
+def deconvolve_image(conv_img, psf, epsilon=1e-6):
+    """
+    Deconvolves an image that was convoluted with a PSF using the Wiener deconvolution method.
+
+    :param conv_img: a 4D tensor representing the convolved image with dimensions (batch_size, channels, height, width)
+    :param psf: the 4D tensor representing the PSF (Point Spread Function) used in the convolution
+    :param epsilon: regularization constant to prevent division by zero
+    :return: the deconvolved image
+    """
+    # Compute the OTF from the PSF
+    otf = psf2otf(psf, output_size=conv_img.shape)
+
+    # Compute the FFT of the convolved image
+    img_fft = torch.fft.fft2(conv_img)
+
+    # Perform the deconvolution in the frequency domain
+    deconv_fft = img_fft / (otf + epsilon)
+
+    # Inverse FFT to get the deconvolved image back in the spatial domain
+    deconv_img = torch.fft.ifft2(deconv_fft).real
+
+    return deconv_img
 
 
 class FresnelPropagator(nn.Module):
@@ -144,20 +173,23 @@ class FresnelPropagator(nn.Module):
 
         xx, yy = get_coordinate(M, N, 1, 1)
         # Spatial frequency
-        fx = xx / (self.discretization_size * N)  # max frequency = 1/(2*pixel_size)
+        # max frequency = 1/(2*pixel_size)
+        fx = xx / (self.discretization_size * N)
         fy = yy / (self.discretization_size * M)
 
         fx = torch.fft.ifftshift(fx)
         fy = torch.fft.ifftshift(fy)
 
         squared_sum = (fx ** 2 + fy ** 2)[None][None]
-        phi = - torch.pi * self.distance * self.wave_lengths.view(1, 3, 1, 1) * squared_sum
+        phi = - torch.pi * self.distance * \
+            self.wave_lengths.view(1, 3, 1, 1) * squared_sum
         H = torch.exp(1j * phi)
         return H
 
     def forward(self, input_field):
         Npad, Mpad = self.Npad, self.Mpad
-        padded_input_field = F.pad(input=input_field, pad=[Npad, Npad, Mpad, Mpad])
+        padded_input_field = F.pad(input=input_field, pad=[
+                                   Npad, Npad, Mpad, Mpad])
 
         objFT = torch.fft.fft2(padded_input_field)
         out_field = torch.fft.ifft2(objFT * self.H)
