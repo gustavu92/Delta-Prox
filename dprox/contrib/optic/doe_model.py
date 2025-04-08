@@ -47,11 +47,6 @@ class HeightMap(nn.Module):
         height_map = self.phase_to_height_map(fresnel_phase, idx)
         return height_map ** 0.5
 
-    def height_from_zernike(self,):
-        height_map = torch.sum(self.zernike_coeffs *
-                               self.zernike_volume, dim=0, keepdim=True).unsqueeze(0)
-        return height_map
-
     def get_phase_profile(self, height_map=None):
         """
         calculate the phase profile of a height map using wave numbers and phase delay.
@@ -60,14 +55,18 @@ class HeightMap(nn.Module):
         calculate the phase delay induced by the height field
         :return: a complex exponential phase profile calculated from the input height map.
         """
-        if height_map is None:
-            if self.zernike_volume is None:
-                height_map = torch.square(self.height_map_sqrt)
-            else:
-                height_map = self.height_from_zernike()
-        # phase delay indiced by height field
-        phi = self.wave_nos * self.delta_N * height_map
+        if self.zernike_volume is None:
+            height_map = torch.square(self.height_map_sqrt)
+            phi = self.wave_nos * self.delta_N * height_map
+        else:
+            phi = 2 * np.pi * torch.sum(self.zernike_coeffs * self.zernike_volume, dim=0, keepdim=True).unsqueeze(0)
+
         return torch.exp(1j * phi)
+    
+    def height_from_zernike(self,):
+        phi = 2 * np.pi * torch.sum(self.zernike_coeffs * self.zernike_volume, dim=0, keepdim=True).unsqueeze(0)
+        height_map = (self.wave_lengths[0] * phi) / (2 * np.pi * (self.refractive_idcs[0] - 1))
+        return height_map
 
     def phase_to_height_map(self, phi, wave_length_idx=1):
         """
