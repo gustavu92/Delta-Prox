@@ -24,13 +24,11 @@ class HeightMap(nn.Module):
             self.height_map_sqrt = nn.Parameter(height_map_sqrt)
         else:
             num_zernike_coeffs = zernike_volume.shape[0]
-            self.zernike_coeffs = torch.zeros((num_zernike_coeffs, 1, 1))
+            self.zernike_coeffs = nn.ParameterList()
 
-            if self.initial_zernike_coefs is not None:
-                for k, v in initial_zernike_coefs.items():
-                    self.zernike_coeffs[k] = v
-
-            self.zernike_coeffs = nn.Parameter(self.zernike_coeffs)
+            for k in range(num_zernike_coeffs):
+                value = initial_zernike_coefs.get(k, 0.0)
+                self.zernike_coeffs.append(nn.Parameter(torch.tensor(value)))
 
     def _fresnel_phase_init(self, idx=1):
         """
@@ -59,12 +57,12 @@ class HeightMap(nn.Module):
             height_map = torch.square(self.height_map_sqrt)
             phi = self.wave_nos * self.delta_N * height_map
         else:
-            phi = 2 * np.pi * torch.sum(self.zernike_coeffs * self.zernike_volume, dim=0, keepdim=True).unsqueeze(0)
+            phi = 2 * np.pi * torch.sum(torch.stack([coef * self.zernike_volume[k] for k, coef in enumerate(self.zernike_coeffs)]), dim=0, keepdim=True).unsqueeze(0)
 
         return torch.exp(1j * phi)
     
     def height_from_zernike(self,):
-        phi = 2 * np.pi * torch.sum(self.zernike_coeffs * self.zernike_volume, dim=0, keepdim=True).unsqueeze(0)
+        phi = 2 * np.pi * torch.sum(torch.stack([coef * self.zernike_volume[k] for k, coef in enumerate(self.zernike_coeffs)]), dim=0, keepdim=True).unsqueeze(0)
         height_map = (self.wave_lengths[0] * phi) / (2 * np.pi * (self.refractive_idcs[0] - 1))
         return height_map
 
@@ -183,7 +181,6 @@ class DOEModelConfig:
     zernike_volume: torch.Tensor = None
     initial_zernike_coefs: dict = None
     circular: bool = True  # circular convolution
-    aperture_diameter: float = 3e-3  # aperture diameter
     sensor_distance: float = 15e-3  # Distance of sensor to aperture
     refractive_idcs: torch.Tensor = field(default_factory=lambda: torch.tensor(
         [1.4648, 1.4599, 1.4568]))  # Refractive indices of the phase plate
@@ -241,16 +238,8 @@ def build_baseline_profile(rgb_collim_model: RGBCollimator):
         height_map = rgb_collim_model.height_map.phase_to_height_map(
             fresnel_phase, 1)
     else:
-        num_zernike_coeffs = rgb_collim_model.zernike_volume.shape[0]
-        zernike_coeffs = torch.zeros((num_zernike_coeffs, 1, 1))
-
-        if rgb_collim_model.initial_zernike_coefs is not None:
-            for k, v in rgb_collim_model.initial_zernike_coefs.items():
-                zernike_coeffs[k] = v
-
-        height_map = torch.sum(
-            zernike_coeffs * rgb_collim_model.zernike_volume, dim=0, keepdim=True)
-        height_map = height_map.unsqueeze(0)
+        pass
+        # TODO
 
     fresnel_phase_c = rgb_collim_model.height_map.get_phase_profile(height_map)
     return fresnel_phase_c
