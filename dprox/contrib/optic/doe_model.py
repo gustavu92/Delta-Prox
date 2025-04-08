@@ -129,7 +129,7 @@ class RGBCollimator(nn.Module):
         psfs = psfs / psfs.sum()
         return psfs
 
-    def forward(self, input_img, phase_profile=None, circular=False):
+    def forward(self, input_img, phase_profile=None, circular=True):
         psfs = self.get_psf(phase_profile)
         output_image = img_psf_conv(input_img, psfs, circular=circular)
         return output_image, psfs
