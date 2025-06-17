@@ -1,7 +1,6 @@
 import torch
 from .common import *
 
-
 class HeightMap(nn.Module):
     def __init__(self, zernike_volume, initial_zernike_coefs, height_map_shape, wave_lengths, refractive_idcs, xx, yy, sensor_distance):
         super().__init__()
@@ -136,6 +135,11 @@ class RGBCollimator(nn.Module):
         psfs = self.get_psf(phase_profile)
         output_image = img_psf_conv(input_img, psfs, circular=circular)
         return output_image, psfs
+
+    def deconvolve_image(self, input_img):
+        psfs = self.get_psf()
+        output_image = deconvolve_image(input_img, psfs, epsilon=1e-6)
+        return output_image
 
     def _init_setup(self):
         input_field = torch.ones(
