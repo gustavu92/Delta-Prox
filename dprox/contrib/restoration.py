@@ -6,8 +6,8 @@ import torch
 from dprox.utils import to_ndarray, to_torch_tensor
 
 samples = {
-    "face": scipy.misc.face(),
-    "ascent": scipy.misc.ascent(),
+    #"face": scipy.misc.face(),
+    #"ascent": scipy.misc.ascent(),
 }
 
 
