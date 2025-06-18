@@ -133,12 +133,34 @@ class RGBCollimator(nn.Module):
 
     def forward(self, input_img, phase_profile=None, circular=True):
         psfs = self.get_psf(phase_profile)
-        output_image = img_psf_conv(input_img, psfs, circular=circular)
-        return output_image, psfs
+        psfs_resized = F.interpolate(psfs, size=input_img.shape[-2:], mode='bilinear', align_corners=False)
+        psfs_resized = psfs_resized / psfs_resized.sum(dim=(-2, -1), keepdim=True)
+        output_image = img_psf_conv(input_img, psfs_resized, circular=circular)
+        return output_image, psfs_resized
 
+    @staticmethod
+    def deconvolve_image_wiener(input_img, psf, epsilon=1e-6, K=1e-3):
+        psf_padded = torch.zeros_like(input_img)
+        psf_center = [s // 2 for s in psf.shape[-2:]]
+        psf_padded[..., :psf.shape[-2], :psf.shape[-1]] = psf
+        psf_padded = torch.roll(psf_padded, shifts=[-psf_center[0], -psf_center[1]], dims=[-2, -1])
+    
+        input_fft = torch.fft.fft2(input_img)
+        psf_fft = torch.fft.fft2(psf_padded)
+        psf_conj = torch.conj(psf_fft)
+        psf_power = psf_fft.abs() ** 2
+        wiener_filter = psf_conj / (psf_power + K + epsilon)
+    
+        result_fft = input_fft * wiener_filter
+        result = torch.fft.ifft2(result_fft).real
+        return result
+    
     def deconvolve_image(self, input_img):
         psfs = self.get_psf()
-        output_image = deconvolve_image(input_img, psfs, epsilon=1e-6)
+        psfs_resized = F.interpolate(psfs, size=input_img.shape[-2:], mode='bilinear', align_corners=False)
+        psfs_resized = psfs_resized / psfs_resized.sum(dim=(-2, -1), keepdim=True)
+        #output_image = deconvolve_image(input_img, psfs_resized, epsilon=1e-6)
+        output_image = self.deconvolve_image_wiener(input_img, psfs_resized, epsilon=1e-6)
         return output_image
 
     def _init_setup(self):
