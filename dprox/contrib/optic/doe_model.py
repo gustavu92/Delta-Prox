@@ -63,9 +63,9 @@ class HeightMap(nn.Module):
     
     def height_from_zernike(self, min_height=50e-6):
         phi = 2 * np.pi * torch.sum(torch.stack([coef * self.zernike_volume[k] for k, coef in enumerate(self.zernike_coeffs)]), dim=0, keepdim=True).unsqueeze(0)
-        k = np.ceil(min_height * (self.refractive_idcs[0] - 1) / self.wave_lengths[0])
+        k = np.ceil(min_height * (self.refractive_idcs[1] - 1) / self.wave_lengths[1])
         phi_wrapped = torch.remainder(phi / k, 2 * np.pi)
-        height_map = k * (phi_wrapped * self.wave_lengths[0]) / (2 * np.pi * (self.refractive_idcs[0] - 1))
+        height_map = k * (phi_wrapped * self.wave_lengths[1]) / (2 * np.pi * (self.refractive_idcs[1] - 1))
         return height_map
 
     def phase_to_height_map(self, phi, wave_length_idx=1):
